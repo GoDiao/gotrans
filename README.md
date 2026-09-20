@@ -10,7 +10,8 @@ macOS 本地翻译。通过 **MLX-Swift** 和一套策展的纯 CPU `llama.cpp` 
 从 [Releases](https://github.com/GoDiao/gotrans/releases/latest) 下载 `GoTrans-<版本>.dmg`，打开后把
 GoTrans 拖进「应用程序」。
 
-**首次打开会被系统拦下。** GoTrans 使用 ad-hoc 签名、未经 Apple 公证，放行方式见[代码签名](#代码签名)。
+首次打开时系统会拦一下，因为 GoTrans 使用 ad-hoc 签名、未经 Apple 公证。到**系统设置 › 隐私与安全性**，
+下滑点一下「仍要打开」就行，只需要做这一次。背景见[代码签名](#代码签名)。
 
 启动后不会自动下载任何模型，需要自己在设置里选一个，见下面的[模型](#模型)一节。
 

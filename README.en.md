@@ -11,8 +11,9 @@ downloaded, no text you translate leaves your Mac.
 Get `GoTrans-<version>.dmg` from [Releases](https://github.com/GoDiao/gotrans/releases/latest), open
 it, and drag GoTrans into Applications.
 
-**macOS will refuse to open it on first launch.** GoTrans is ad-hoc signed and not notarised; see
-[Code signing](#code-signing) for how to get past that.
+macOS stops it on first launch, because GoTrans is ad-hoc signed and not notarised. Go to **System
+Settings › Privacy & Security**, scroll down and click **Open Anyway** — once, and never again.
+Background in [Code signing](#code-signing).
 
 No model is downloaded automatically — pick one in settings first, see [Models](#models) below.
 
