@@ -1,0 +1,15 @@
+.build/
+Vendor/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+.DS_Store
+App/build/
+*.litertlm
+.agents/
+skills-lock.json
+App/build-release/
+Runtime/LlamaRuntime/Artifacts/
+.build-cli/
+dist/
+*.profraw

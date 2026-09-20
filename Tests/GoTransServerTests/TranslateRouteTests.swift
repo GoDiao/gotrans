@@ -1,0 +1,136 @@
+import Testing
+import Foundation
+import FlyingFox
+@testable import GoTransServer
+import GoTransKit
+
+@Suite struct TranslateRouteTests {
+    @Test(arguments: [false, true]) func oversizedPromptFailsBeforeStartingEitherStream(stream: Bool) async throws {
+        let (base, task) = try await startServer(OversizedPromptTranslator())
+        defer { task.cancel() }
+        for path in ["translate", "v1/chat/completions"] {
+            var request = URLRequest(url: base.appendingPathComponent(path))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject:
+                path == "translate" ? ["text": "hello", "stream": stream] :
+                    ["messages": [["role": "user", "content": "hello"]], "stream": stream])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            #expect((response as? HTTPURLResponse)?.statusCode == 400)
+            let body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            #expect(body?["error"] as? String == "prompt_too_long")
+        }
+    }
+    @Test func serverTimeoutCoversLocalGenerationWindow() {
+        #expect(APIServer.requestTimeout == 120)
+    }
+
+    func startServer(
+        _ translator: some TranslationService, queueTimeout: Double = 30
+    ) async throws -> (URL, Task<Void, Error>) {
+        let api = APIServer(translator: translator, port: 0, queueTimeout: queueTimeout)
+        let task = Task { try await api.run() }
+        let port = try await api.waitForPort()
+        return (URL(string: "http://127.0.0.1:\(port)")!, task)
+    }
+
+    @Test func healthReturnsReady() async throws {
+        let (base, task) = try await startServer(MockTranslator())
+        defer { task.cancel() }
+        let (data, resp) = try await URLSession.shared.data(from: base.appendingPathComponent("health"))
+        #expect((resp as! HTTPURLResponse).statusCode == 200)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(json["status"] as? String == "ready")
+        #expect(json["service"] as? String == "gotrans")  // 单实例探测靠它验明正身
+    }
+
+    @Test func translateReturnsTranslation() async throws {
+        let (base, task) = try await startServer(MockTranslator())
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "Hello, world"])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 200)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(json["translation"] as? String == "你好，世界")
+        #expect(json["detected"] as? String == "en")
+        #expect(json["target"] as? String == "zh-Hans")
+    }
+
+    @Test func emptyTextReturns400() async throws {
+        let (base, task) = try await startServer(MockTranslator())
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": ""])
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 400)
+    }
+
+    @Test func engineNotReadyReturns503() async throws {
+        let (base, task) = try await startServer(MockTranslator(ready: false))
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "hi"])
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 503)
+    }
+
+    @Test func streamTranslateSendsSSE() async throws {
+        let (base, task) = try await startServer(MockTranslator())
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "Hello", "stream": true])
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let http = resp as! HTTPURLResponse
+        #expect(http.statusCode == 200)
+        #expect(http.value(forHTTPHeaderField: "Content-Type")?.contains("text/event-stream") == true)
+        var events: [String] = []
+        for try await line in bytes.lines where line.hasPrefix("data: ") {
+            events.append(String(line.dropFirst(6)))
+            if events.last == "[DONE]" { break }
+        }
+        #expect(events.count == 5)  // 3 个 delta + 1 个 final + [DONE]
+        #expect(events.first?.contains("你好") == true)
+        #expect(events.dropLast().last?.contains("\"translation\"") == true)
+        #expect(events.last == "[DONE]")
+    }
+
+    @Test func unknownEngineErrorReturns500WithDetail() async throws {
+        let (base, task) = try await startServer(ExplodingTranslator())
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "hi"])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 500)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect((json["error"] as? String)?.contains("allocation failed") == true)
+    }
+
+    @Test func midStreamEngineErrorReturns500WithDetail() async throws {
+        let (base, task) = try await startServer(ExplodingTranslator(failInStream: true))
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "hi"])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 500)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect((json["error"] as? String)?.contains("allocation failed") == true)
+    }
+
+    @Test func busyEngineTimesOutWith503() async throws {
+        let (base, task) = try await startServer(StuckTranslator(), queueTimeout: 0.2)
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "hi"])
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 503)
+    }
+}

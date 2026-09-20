@@ -1,0 +1,31 @@
+targetTemplates:
+  GoTransShared:
+    type: application
+    platform: macOS
+    postBuildScripts:
+    - name: Bundle source and dependency notices
+      basedOnDependencyAnalysis: false
+      script: |
+        set -eu
+        python3 "$GOTRANS_SOURCE_ROOT/Scripts/collect-notices.py" --output "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Notices" --checkouts "$GOTRANS_DEPENDENCY_CHECKOUTS"
+    dependencies:
+    - package: GoTransCore
+      product: GoTransKit
+    - package: GoTransCore
+      product: GoTransServer
+    - package: KeyboardShortcuts
+    settings:
+      base:
+        GOTRANS_SOURCE_ROOT: $(SRCROOT)/..
+        GOTRANS_DEPENDENCY_CHECKOUTS: $(BUILD_DIR)/../../SourcePackages/checkouts
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_VERSION: '6.0'
+        ARCHS: arm64
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        PRODUCT_BUNDLE_IDENTIFIER: com.godiao.GoTrans
+        PRODUCT_NAME: GoTrans

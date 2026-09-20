@@ -1,0 +1,83 @@
+import Foundation
+import FlyingFox
+import GoTransKit
+
+struct TranslateRequest: Decodable {
+    let text: String
+    let target: String?
+    let stream: Bool?
+}
+
+/// 排队/整体超时（spec：30 秒未完成排队产出 → 503）。测试注入小值。
+func withQueueTimeout<T: Sendable>(
+    _ seconds: Double, _ op: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await op() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(seconds))
+            throw TranslationError.queueTimeout
+        }
+        guard let first = try await group.next() else { throw TranslationError.queueTimeout }
+        group.cancelAll()
+        return first
+    }
+}
+
+func registerTranslateRoute(
+    server: HTTPServer, translator: any TranslationService, queueTimeout: Double = 30
+) async {
+    await server.appendRoute("POST /translate") { request in
+        let body = try await request.bodyData
+        guard let req = try? JSONDecoder().decode(TranslateRequest.self, from: body) else {
+            return try .json(["error": "invalid JSON, expect {\"text\": ...}"], statusCode: .badRequest)
+        }
+        do {
+            let result = try await translator.translate(req.text, target: req.target)
+            if req.stream == true {
+                let meta = (detected: result.detected, target: result.target, truncated: result.truncated)
+                let (dataStream, cont) = AsyncStream.makeStream(of: Data.self)
+                Task {
+                    var full = ""
+                    do {
+                        for try await chunk in result.chunks {
+                            full += chunk
+                            cont.yield(SSE.event(["delta": chunk]))
+                        }
+                        cont.yield(SSE.event([
+                            "translation": full.trimmingCharacters(in: .whitespacesAndNewlines),
+                            "detected": meta.detected, "target": meta.target, "truncated": meta.truncated,
+                        ]))
+                    } catch {
+                        cont.yield(SSE.event(["error": "\(error)"]))
+                    }
+                    cont.yield(SSE.done)
+                    cont.finish()
+                }
+                return HTTPResponse(
+                    statusCode: .ok, headers: SSE.headers,
+                    body: HTTPBodySequence(from: SSEBody(stream: dataStream), suggestedBufferSize: 1024)
+                )
+            }
+            let text = try await withQueueTimeout(queueTimeout) { try await result.fullText() }
+            return try .json([
+                "translation": text,
+                "detected": result.detected,
+                "target": result.target,
+                "truncated": result.truncated,
+            ])
+        } catch TranslationError.emptyInput {
+            return try .json(["error": "text is empty"], statusCode: .badRequest)
+        } catch TranslationError.promptTooLong {
+            return try .json(["error": "prompt_too_long", "message": TranslationError.promptTooLong.localizedDescription], statusCode: .badRequest)
+        } catch TranslationError.modelNotLoaded {
+            return try .json(["error": "model not loaded"], statusCode: .serviceUnavailable)
+        } catch TranslationError.queueTimeout {
+            return try .json(["error": "engine busy, timed out"], statusCode: .serviceUnavailable)
+        } catch {
+            // 引擎层未知错误（如内存压力下 GPU 分配失败）：透出详情，便于客户端与日志定位
+            GTLog.error("translate failed: \(error)")
+            return try .json(["error": "\(error)"], statusCode: .internalServerError)
+        }
+    }
+}
