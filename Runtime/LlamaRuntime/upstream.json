@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "runtimeVersion": "2.2.0-r1",
+  "runtimeVersion": "1.0.0-r1",
   "llamaCpp": {
     "repository": "https://github.com/ggml-org/llama.cpp.git",
     "stqBaseline": {
@@ -24,8 +24,8 @@
     "40": "STQ1_0 (Hy-MT2 v2 contiguous groups-of-four layout)",
     "41": "Q2_0C",
     "42": "Q2_0",
-    "43": "NVFP4 (runtime-internal; not accepted by GemmaTrans)",
-    "44": "Q1_0 (runtime-internal; not accepted by GemmaTrans)"
+    "43": "NVFP4 (runtime-internal; not accepted by GoTrans)",
+    "44": "Q1_0 (runtime-internal; not accepted by GoTrans)"
   },
   "build": {
     "platform": "macOS arm64",

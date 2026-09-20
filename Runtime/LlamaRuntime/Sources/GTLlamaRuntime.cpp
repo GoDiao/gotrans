@@ -1,4 +1,4 @@
-#include "GemmaLlamaRuntime.h"
+#include "GTLlamaRuntime.h"
 
 #include "chat.h"
 #include "llama.h"

@@ -1,4 +1,4 @@
-#include "GemmaLlamaRuntime.h"
+#include "GTLlamaRuntime.h"
 
 #include <algorithm>
 #include <chrono>
@@ -142,10 +142,10 @@ void run_model(const char * path, gt_llama_quantization quantization, int repeti
         const std::string prompt = to_chinese
             ? "Translate the following text into Chinese. Note that you should only output the "
               "translated result without any additional explanation:\n\n"
-              "Hello, welcome to GemmaTrans. Your text stays private and is translated entirely on this Mac."
+              "Hello, welcome to GoTrans. Your text stays private and is translated entirely on this Mac."
             : "Translate the following text into English. Note that you should only output the "
               "translated result without any additional explanation:\n\n"
-              "你好，欢迎使用 GemmaTrans。你的文本不会离开这台 Mac。";
+              "你好，欢迎使用 GoTrans。你的文本不会离开这台 Mac。";
         gt_llama_metrics metrics{};
         const std::string output = translate(model.get(), prompt, &metrics);
         if (output.empty() || output.find("[end of text]") != std::string::npos ||

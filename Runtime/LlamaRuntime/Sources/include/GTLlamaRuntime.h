@@ -1,5 +1,5 @@
-#ifndef GEMMA_LLAMA_RUNTIME_H
-#define GEMMA_LLAMA_RUNTIME_H
+#ifndef GT_LLAMA_RUNTIME_H
+#define GT_LLAMA_RUNTIME_H
 
 #include <stdbool.h>
 #include <stddef.h>

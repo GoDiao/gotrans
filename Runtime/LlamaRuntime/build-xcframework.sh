@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORK_DIR="${GT_LLAMA_BUILD_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gemmatrans-llama-runtime.XXXXXX")}" 
+WORK_DIR="${GT_LLAMA_BUILD_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gotrans-llama-runtime.XXXXXX")}" 
 OUTPUT_DIR="${GT_LLAMA_OUTPUT_DIR:-$SCRIPT_DIR/Artifacts}"
 SOURCE_DIR="$WORK_DIR/llama.cpp"
 BUILD_DIR="$WORK_DIR/build"
@@ -52,8 +52,8 @@ xcrun clang++ -std=c++17 -O3 -DNDEBUG -arch arm64 -mmacosx-version-min=15.0 \
     -I"$SOURCE_DIR/common" \
     -I"$SOURCE_DIR/vendor" \
     -I"$SOURCE_DIR/vendor/nlohmann" \
-    -c "$SCRIPT_DIR/Sources/GemmaLlamaRuntime.cpp" \
-    -o "$PRODUCT_DIR/GemmaLlamaRuntime.o"
+    -c "$SCRIPT_DIR/Sources/GTLlamaRuntime.cpp" \
+    -o "$PRODUCT_DIR/GTLlamaRuntime.o"
 
 # llama-common also contains optional download/HTTP/subprocess helpers. The runtime needs only the
 # chat-template/Jinja closure below; extract that audited object set so the XCFramework cannot expose
@@ -99,7 +99,7 @@ for object_name in "${COMMON_OBJECT_NAMES[@]}"; do
 done
 
 ZERO_AR_DATE=1 /usr/bin/libtool -static -o "$PRODUCT_DIR/libLlamaRuntime.a" \
-    "$PRODUCT_DIR/GemmaLlamaRuntime.o" \
+    "$PRODUCT_DIR/GTLlamaRuntime.o" \
     "${COMMON_OBJECTS[@]}" \
     "$BUILD_DIR/src/libllama.a" \
     "$BUILD_DIR/ggml/src/libggml.a" \
@@ -129,7 +129,7 @@ if ! printf '%s\n' "$MIN_OS_VALUES" | awk -F. '
 fi
 echo "Runtime minimum macOS versions: $MIN_OS_VALUES"
 
-cp "$SCRIPT_DIR/Sources/include/GemmaLlamaRuntime.h" "$PRODUCT_DIR/Headers/"
+cp "$SCRIPT_DIR/Sources/include/GTLlamaRuntime.h" "$PRODUCT_DIR/Headers/"
 cp "$SCRIPT_DIR/Sources/include/module.modulemap" "$PRODUCT_DIR/Headers/"
 
 rm -rf "$OUTPUT_DIR/LlamaRuntime.xcframework"
@@ -139,13 +139,13 @@ xcodebuild -create-xcframework \
     -output "$OUTPUT_DIR/LlamaRuntime.xcframework"
 
 find "$OUTPUT_DIR/LlamaRuntime.xcframework" -exec touch -h -t 202001010000 {} +
-rm -f "$OUTPUT_DIR/LlamaRuntime-2.2.0-r1.zip"
+rm -f "$OUTPUT_DIR/LlamaRuntime-1.0.0-r1.zip"
 (
     cd "$OUTPUT_DIR"
     find LlamaRuntime.xcframework -print | LC_ALL=C sort | \
-        COPYFILE_DISABLE=1 zip -X -q "LlamaRuntime-2.2.0-r1.zip" -@
+        COPYFILE_DISABLE=1 zip -X -q "LlamaRuntime-1.0.0-r1.zip" -@
 )
 
 file "$PRODUCT_DIR/libLlamaRuntime.a"
-shasum -a 256 "$OUTPUT_DIR/LlamaRuntime-2.2.0-r1.zip"
-swift package compute-checksum "$OUTPUT_DIR/LlamaRuntime-2.2.0-r1.zip"
+shasum -a 256 "$OUTPUT_DIR/LlamaRuntime-1.0.0-r1.zip"
+swift package compute-checksum "$OUTPUT_DIR/LlamaRuntime-1.0.0-r1.zip"

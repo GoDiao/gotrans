@@ -18,8 +18,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "LlamaRuntime",
-            url: "https://github.com/Rand01ph/gemma-trans/releases/download/runtime-llama-2.2.0-r1/LlamaRuntime-2.2.0-r1.zip",
-            checksum: "58dcad403e81b6e82d43aa2c87d0c35c4b21c620563ebe892dc34f25a1e6130f"
+            url: "https://github.com/GoDiao/gotrans/releases/download/runtime-llama-1.0.0-r1/LlamaRuntime-1.0.0-r1.zip",
+            checksum: "18532f7648d07a28e7a5b7f620fa6585d26b3c6ae1915d456560c76337ca0ce4"
         ),
         .target(
             name: "GoTransKit",

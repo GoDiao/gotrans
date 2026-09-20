@@ -184,7 +184,7 @@ index 09ce8f995..8474f7f02 100644
          GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
 -        GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
 -        GGML_TYPE_Q1_0    = 41,
-+        // GemmaTrans curated Hy-MT2 v2 GGUF mapping. These two artifact
++        // GoTrans curated Hy-MT2 v2 GGUF mapping. These two artifact
 +        // formats intentionally occupy 40/41 in the mobile runtime.
 +        GGML_TYPE_STQ1_0  = 40,
 +        GGML_TYPE_Q2_0C   = 41,
@@ -2344,11 +2344,11 @@ index 1c5a459f2..c5d8c6358 100644
  }
  
  namespace ggml::cpu::kleidiai {
-+static std::atomic<bool> gemmatrans_enabled(getenv("GEMMATRANS_DISABLE_KLEIDIAI") == nullptr);
++static std::atomic<bool> gotrans_enabled(getenv("GOTRANS_DISABLE_KLEIDIAI") == nullptr);
 +
  class extra_buffer_type : ggml::cpu::extra_buffer_type {
      bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
-+        if (!gemmatrans_enabled.load(std::memory_order_relaxed)) {
++        if (!gotrans_enabled.load(std::memory_order_relaxed)) {
 +            return false;
 +        }
 +
@@ -2379,7 +2379,7 @@ index 1c5a459f2..c5d8c6358 100644
      }
  
      ggml::cpu::tensor_traits * get_tensor_traits(const struct ggml_tensor * op) override {
-+        if (!gemmatrans_enabled.load(std::memory_order_relaxed)) {
++        if (!gotrans_enabled.load(std::memory_order_relaxed)) {
 +            return nullptr;
 +        }
 +
@@ -2392,7 +2392,7 @@ index 1c5a459f2..c5d8c6358 100644
  }
 +
 +void ggml_backend_cpu_kleidiai_set_enabled(bool enabled) {
-+    ggml::cpu::kleidiai::gemmatrans_enabled.store(enabled, std::memory_order_relaxed);
++    ggml::cpu::kleidiai::gotrans_enabled.store(enabled, std::memory_order_relaxed);
 +}
 diff --git a/ggml/src/ggml-cpu/kleidiai/kleidiai.h b/ggml/src/ggml-cpu/kleidiai/kleidiai.h
 index 38eac58f7..54516a810 100644
