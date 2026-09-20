@@ -4,10 +4,17 @@ On-device translation for macOS. Runs Google **Gemma 4** and Tencent **Hy-MT2** 
 Silicon through **MLX-Swift** and a curated CPU-only `llama.cpp` runtime. Once a model is
 downloaded, no text you translate leaves your Mac.
 
-[中文说明](README.md) · [Privacy Policy](PRIVACY.en.md)
+[Download](https://github.com/GoDiao/gotrans/releases/latest) · [中文说明](README.md) · [Privacy Policy](PRIVACY.en.md)
 
-> **Status: source only.** There is no published release yet, so the only way to run GoTrans today
-> is to build it yourself. The instructions below are complete and have been verified end to end.
+## Download
+
+Get `GoTrans-<version>.dmg` from [Releases](https://github.com/GoDiao/gotrans/releases/latest), open
+it, and drag GoTrans into Applications.
+
+**macOS will refuse to open it on first launch.** GoTrans is ad-hoc signed and not notarised; see
+[Code signing](#code-signing) for how to get past that.
+
+No model is downloaded automatically — pick one in settings first, see [Models](#models) below.
 
 ## What it does
 
@@ -52,6 +59,8 @@ Quantisation trades quality for size, and lower is not uniformly worse on every 
 not always beat 1.25-bit. Test with your own text before committing to one.
 
 ## Building from source
+
+Not needed to use GoTrans — download the DMG instead. This is for working on the code.
 
 You need Xcode with the macOS 26 SDK (the Liquid Glass branches are compiled behind availability
 checks), XcodeGen, and the Metal toolchain. A first-time setup on a clean machine looks like this:
