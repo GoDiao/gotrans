@@ -45,8 +45,10 @@ it, then set it as the active model.
 
 | Model | Size | Notes |
 | --- | ---: | --- |
+| Qwen3.5 9B (4-bit) | ~6.0 GB | General purpose, the largest here |
 | Gemma 4 E4B (4-bit) | ~5.2 GB | General purpose; also powers the free-form text actions |
 | Gemma 4 E2B (4-bit) | ~3.6 GB | Smaller general-purpose option |
+| Qwen3.5 4B (4-bit) | ~3.1 GB | General purpose, smaller than Gemma 4 E2B |
 | Hy-MT2 1.8B (8-bit) | ~1.9 GB | Translation-specialised |
 | Hy-MT2 1.8B (4-bit) | ~1.0 GB | Translation-specialised |
 | Hy-MT2 1.8B (2-bit) | ~601 MB | Translation-specialised, curated GGUF |
