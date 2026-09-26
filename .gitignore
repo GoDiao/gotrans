@@ -13,3 +13,8 @@ Runtime/LlamaRuntime/Artifacts/
 .build-cli/
 dist/
 *.profraw
+
+# SwiftPM 解析结果。xcodebuild 会把只声明在 App/project.yml 里的 KeyboardShortcuts
+# 写进来，swift build 又会把它写掉，于是这个文件在两套工具链之间来回翻、谁最后构建谁赢。
+# 一个内容取决于「最后跑了哪条命令」的锁文件没在锁任何东西，因此不再跟踪（I29）。
+Package.resolved

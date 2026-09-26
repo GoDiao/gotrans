@@ -4,17 +4,17 @@ public struct TranslationPromptRequest: Sendable {
     public let text: String
     public let detected: String
     public let target: String
-    public let family: ModelFamily
+    public let usesSystemPrompt: Bool
 
-    public init(text: String, detected: String, target: String, family: ModelFamily) {
+    public init(text: String, detected: String, target: String, usesSystemPrompt: Bool) {
         self.text = text
         self.detected = detected
         self.target = target
-        self.family = family
+        self.usesSystemPrompt = usesSystemPrompt
     }
 
     public var defaultPrompt: TranslationPrompt {
-        TranslationPrompt(system: family == .gemma ? PromptBuilder.systemPrompt : nil,
+        TranslationPrompt(system: usesSystemPrompt ? PromptBuilder.systemPrompt : nil,
                           user: PromptBuilder.userPrompt(text: text, target: target))
     }
 }

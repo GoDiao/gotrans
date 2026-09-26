@@ -32,7 +32,7 @@ public enum TranslationError: Error, Sendable {
     case emptyInput
     case queueTimeout
     case promptTooLong
-    /// family 对应的加载器尚未实现；msg 为展示给调用方的中文说明。
+    /// 该条目对应的加载器尚未实现；msg 为展示给调用方的中文说明。
     case modelNotSupported(String)
 }
 

@@ -79,11 +79,28 @@ actor LlamaRuntime {
 #endif
     }
 
+    /// ggml 的通用线程数。性能核数取得到就用它，取不到退回原来的公式。
+    ///
+    /// 原公式 `min(8, max(2, 逻辑核数 - 2))` 靠「减掉两个能效核」逼近性能核数，只在恰好有
+    /// 两个能效核的机型上对：M1 Pro（6P+2E）得 6，正确；M4 Max（12P+4E）得 8，空出四个
+    /// 性能核；M1 基础款（4P+4E）得 6，反而超了。上限 8 也随之去掉——它是那个近似的产物。
+    ///
+    /// 本机（M1 Pro）新旧公式都得 6，所以这条改动在这里**看不出差异**，只能靠下面的单测
+    /// 证明（设计风险三）。与运行时补丁里那段 `hw.perflevel` 逻辑无关：那段算的是 SME
+    /// 计算单元数，落在 `sme_thread_cap`，只作用于 KleidiAI 的 SME 系内核，两个旋钮正交。
+    static func threadCount(performanceCores: Int?, activeProcessors: Int) -> Int {
+        if let performanceCores, performanceCores > 0 {
+            return max(2, performanceCores)
+        }
+        return min(8, max(2, activeProcessors - 2))
+    }
+
     func load(fileURL: URL, quantization: GGUFQuantization) throws {
 #if os(macOS)
         unload()
-        let active = ProcessInfo.processInfo.activeProcessorCount
-        let threads = min(8, max(2, active - 2))
+        let threads = Self.threadCount(
+            performanceCores: SystemCPU.performanceCoreCount(),
+            activeProcessors: ProcessInfo.processInfo.activeProcessorCount)
         let cQuantization: gt_llama_quantization = switch quantization {
         case .stq1_0: GT_LLAMA_QUANTIZATION_STQ1_0
         case .q2_0c: GT_LLAMA_QUANTIZATION_Q2_0C

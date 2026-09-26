@@ -38,6 +38,9 @@ enum GTGlassPalette {
         return isDark ? NSColor(white: 1, alpha: 0.58) : NSColor(white: 0, alpha: 0.54)
     })
     static let semanticReady = Color(nsColor: .systemGreen)
+    /// 三档指示灯的中间色。用 systemOrange 而不是 systemYellow：卡片在浅色下接近白，
+    /// 纯黄的对比度只有 1.4:1 几乎看不见，橙黄仍读作「黄灯」且两种外观下都立得住。
+    static let semanticCaution = Color(nsColor: .systemOrange)
     static let semanticRed = Color(nsColor: .systemRed)
 
     static func accent(for _: ColorScheme) -> Color {

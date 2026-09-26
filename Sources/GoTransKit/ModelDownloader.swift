@@ -27,6 +27,7 @@ public enum ModelDownloadError: Error, LocalizedError, Equatable {
     case emptyFileList(repo: String)
     case sizeMismatch(path: String, expected: Int64, actual: Int64)
     case checksumMismatch(path: String, expected: String, actual: String)
+    case insufficientDiskSpace(needed: Int64, free: Int64)
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +39,8 @@ public enum ModelDownloadError: Error, LocalizedError, Equatable {
             "字节数不符 \(path)：期望 \(expected)，实得 \(actual)"
         case .checksumMismatch(let path, let expected, let actual):
             "模型文件校验失败，请重试（\(path)：期望 \(expected)，实得 \(actual)）"
+        case .insufficientDiskSpace(let needed, let free):
+            "磁盘空间不足：还需下载 \(needed) 字节，可用 \(free) 字节，差 \(needed - free) 字节"
         }
     }
 }
@@ -223,6 +226,9 @@ public enum ModelDownloader {
             return true
         case .modelScopeError:
             return false
+        case .insufficientDiskSpace:
+            // 本地磁盘不够，换个源一样不够。换源只处理「远端不可用或内容异常」。
+            return false
         }
     }
 
@@ -289,6 +295,17 @@ public enum ModelDownloader {
         // 小文件在前：配置/分词器先就位，大权重殿后（中断时损失最小）
         let ordered = files.sorted { $0.size < $1.size }
         let totalBytes = ordered.reduce(Int64(0)) { $0 + $1.size }
+
+        // 磁盘闸门第二段。界面那一段按 catalog 常量事前提示，而常量对四个整仓条目不带
+        // revision、会随上游提交漂移（D16 接受这个代价）；这里拿清单实算值复核一次，
+        // 是真正的保证。比的是「还要下多少」而不是「一共多大」（评审 I18）。
+        let stillNeeded = remainingBytes(for: ordered, in: dir)
+        if let shortfall = diskShortfall(
+            needed: stillNeeded, freeBytes: SystemDisk.freeBytes(at: dir)) {
+            GTLog.error("download refused: \(repo) needs \(stillNeeded) more bytes, short by \(shortfall)")
+            throw ModelDownloadError.insufficientDiskSpace(
+                needed: stillNeeded, free: stillNeeded - shortfall)
+        }
         var doneBytes: Int64 = 0
         // 自研路径字节数已知：completed/total 都给（UI 据此显示「已下/总量」）
         let report: @Sendable (Int64) -> Void = { completed in
@@ -369,6 +386,28 @@ public enum ModelDownloader {
                 .filter { $0.Type == "blob" && !isSkipped($0.Path) }
                 .map { RemoteFile(path: $0.Path, size: $0.Size) }
         }
+    }
+
+    /// 还需要下载多少字节。**不是整仓总字节**：已经完整落盘的文件会被下载循环跳过，
+    /// 未完成的文件按已有 `.part` 字节带 Range 续传，两者都不用再下一遍。
+    /// 拿总字节去比剩余空间，会把一个已经下到 90% 的续传永远拦死——用户剩 1 GB、实际只差
+    /// 0.5 GB，闸门却按 5.2 GB 拒绝，这次下载再也完不成（评审 I18）。
+    static func remainingBytes(for files: [RemoteFile], in dir: URL) -> Int64 {
+        files.reduce(Int64(0)) { total, file in
+            let dest = dir.appendingPathComponent(file.path)
+            if fileSize(at: dest) == file.size { return total }          // 已完整，跳过
+            let partial = fileSize(at: dest.appendingPathExtension("part")) ?? 0
+            return total + max(0, file.size - partial)
+        }
+    }
+
+    /// 还差多少字节；nil 表示够用，或剩余空间读不到。
+    /// 剩余空间是参数而不是就地去读，所以测试不必真的把磁盘填满。
+    /// 读不到时不拦——缺数据不构成拒绝的理由（设计「两个闸门」）。
+    static func diskShortfall(needed: Int64, freeBytes: UInt64?) -> Int64? {
+        guard let freeBytes else { return nil }
+        let free = Int64(clamping: freeBytes)
+        return needed > free ? needed - free : nil
     }
 
     static func listURL(repo: String, source: ModelSource) -> URL {

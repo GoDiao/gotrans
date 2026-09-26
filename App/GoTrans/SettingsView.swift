@@ -41,6 +41,10 @@ struct SettingsView: View {
     @State private var portError: String?
     @State private var switchBlockMessage: String?
     @State private var pendingModelDeletion: ModelCatalogEntry?
+    /// 判定为「吃力」时，下载前的一次确认（D7 三、D11）。仅此一个触发条件，不追加体积阈值。
+    @State private var pendingStrainedDownload: ModelCatalogEntry?
+    /// 磁盘不足时说明原因的提示。磁盘是唯一算得准的信号，所以只有它能真的拦（D7 三）。
+    @State private var diskBlockedMessage: String?
     @State private var installed: [InstalledModel] = []
     @State private var appearanceStore = GTAppearanceStore.shared
     @State private var targetForChineseTask: Task<Void, Never>?
@@ -70,7 +74,9 @@ struct SettingsView: View {
                 .tabItem { Label(SettingsSection.general.title, systemImage: SettingsSection.general.symbol) }
                 .tag(SettingsSection.general)
 
-                settingsPage(title: "模型", subtitle: "下载、切换和管理本地模型。") {
+                settingsPage(title: "模型", subtitle: "下载、切换和管理本地模型。",
+                             scrolls: false) {
+                    runtimeStatusSection
                     modelSection
                 }
                 .tabItem { Label(SettingsSection.models.title, systemImage: SettingsSection.models.symbol) }
@@ -111,6 +117,23 @@ struct SettingsView: View {
         } message: {
             Text(switchBlockMessage ?? "")
         }
+        .alert("这个模型可能跑得吃力", isPresented: Binding(
+            get: { pendingStrainedDownload != nil },
+            set: { if !$0 { pendingStrainedDownload = nil } }
+        )) {
+            Button("取消", role: .cancel) { pendingStrainedDownload = nil }
+            Button("仍然下载") { confirmStrainedDownload() }
+        } message: {
+            Text(strainedConfirmationMessage)
+        }
+        .alert("磁盘空间不足", isPresented: Binding(
+            get: { diskBlockedMessage != nil },
+            set: { if !$0 { diskBlockedMessage = nil } }
+        )) {
+            Button("好") { diskBlockedMessage = nil }
+        } message: {
+            Text(diskBlockedMessage ?? "")
+        }
         .alert("删除模型？", isPresented: Binding(
             get: { pendingModelDeletion != nil },
             set: { if !$0 { pendingModelDeletion = nil } }
@@ -122,34 +145,56 @@ struct SettingsView: View {
         }
     }
 
+    /// - Parameter scrolls: 整页滚动。模型页传 `false`——它把滚动交给模型列表自己，
+    ///   让机器读数、引擎状态和「本地模型」标题钉在原位。两层 ScrollView 会抢手势，
+    ///   所以这两者只能二选一。
+    @ViewBuilder
     private func settingsPage<Content: View>(title: String,
                                              subtitle: String,
+                                             scrolls: Bool = true,
                                              @ViewBuilder content: () -> Content) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: GTGlassTokens.Space.l) {
-                HStack(spacing: GTGlassTokens.Space.m) {
-                    Image(systemName: selectedSection.symbol)
-                        .font(.title3.weight(.semibold))
-                        .frame(width: GTGlassTokens.Icon.chip, height: GTGlassTokens.Icon.chip)
-                        .background {
-                            RoundedRectangle(cornerRadius: GTGlassTokens.Radius.control,
-                                             style: .continuous)
-                                .fill(Color.primary.opacity(0.07))
-                        }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title).font(.title3.weight(.semibold))
-                        Text(subtitle).font(.caption).foregroundStyle(GTGlassPalette.secondaryText)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, GTGlassTokens.Space.xs)
+        if scrolls {
+            scrollingPage(title: title, subtitle: subtitle, content: content)
+        } else {
+            pageBody(title: title, subtitle: subtitle, content: content)
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+    }
 
-                content()
-            }
-            .padding(GTGlassTokens.Space.xl)
-            .frame(maxWidth: GTGlassTokens.Panel.settingsWidth)
+    private func scrollingPage<Content: View>(title: String,
+                                              subtitle: String,
+                                              @ViewBuilder content: () -> Content) -> some View {
+        ScrollView {
+            pageBody(title: title, subtitle: subtitle, content: content)
         }
         .gtSoftScrollEdges()
+    }
+
+    private func pageBody<Content: View>(title: String,
+                                         subtitle: String,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: GTGlassTokens.Space.l) {
+            HStack(spacing: GTGlassTokens.Space.m) {
+                Image(systemName: selectedSection.symbol)
+                    .font(.title3.weight(.semibold))
+                    .frame(width: GTGlassTokens.Icon.chip, height: GTGlassTokens.Icon.chip)
+                    .background {
+                        RoundedRectangle(cornerRadius: GTGlassTokens.Radius.control,
+                                         style: .continuous)
+                            .fill(Color.primary.opacity(0.07))
+                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.title3.weight(.semibold))
+                    Text(subtitle).font(.caption).foregroundStyle(GTGlassPalette.secondaryText)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, GTGlassTokens.Space.xs)
+
+            content()
+        }
+        .padding(GTGlassTokens.Space.xl)
+        .frame(maxWidth: GTGlassTokens.Panel.settingsWidth)
     }
 
     private var appearanceSection: some View {
@@ -270,6 +315,16 @@ struct SettingsView: View {
         }
     }
 
+    /// 机器读数与引擎状态自成一节。它们不是「本地模型」列表里的条目，和模型行框在同一张卡片里
+    /// 会读成「这台机器」也是一个可下载的模型。
+    private var runtimeStatusSection: some View {
+        GTPanelSection(title: "运行状态") {
+            machineSignalsRow
+            GTPanelDivider()
+            engineStatusRow
+        }
+    }
+
     private var modelSection: some View {
         let installedIDs = Set(installed.map(\.id))
 
@@ -277,15 +332,37 @@ struct SettingsView: View {
             title: "本地模型",
             subtitle: "下载后选择使用；Hugging Face 不可用时会自动切换 ModelScope。"
         ) {
-            engineStatusRow
-            GTPanelDivider()
-
-            ForEach(ModelCatalog.entries) { entry in
-                catalogRow(entry, installedIDs: installedIDs)
-                if entry.id != ModelCatalog.entries.last?.id {
-                    GTPanelDivider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(ModelCatalog.entries) { entry in
+                        catalogRow(entry, installedIDs: installedIDs)
+                        if entry.id != ModelCatalog.entries.last?.id {
+                            GTPanelDivider()
+                        }
+                    }
                 }
             }
+            .gtSoftScrollEdges()
+        }
+    }
+
+    /// 节头部那行「依据」：芯片、性能核数、总内存、磁盘剩余（D12、D14）。
+    /// **不显示可用内存**（D12）：`free + inactive` 量的是「不做任何动作就能立刻交出去的量」，
+    /// 摆在模型体积旁边会让人得出「装不下」的错误结论，而那正是本机制要消除的劝退信号。
+    /// 也不再声明「内存判定是估算」（D17）——那句话由每行的「运行约占内存 X%」承担。
+    ///
+    /// 放成一行普通 row 而不是塞进 `GTPanelSection` 的头部：那个组件只收 `title` 与
+    /// `subtitle` 两个字符串，且被五个设置分节共用，为这一处改它不划算。
+    private var machineSignalsRow: some View {
+        let machine = EngineController.shared.machineProfile
+        var parts: [String] = []
+        if let chip = machine.chipName { parts.append(chip) }
+        if let cores = machine.performanceCoreCount { parts.append("性能核 \(cores)") }
+        parts.append("内存 \(ModelFitCopy.formatMemory(machine.physicalMemory))")
+        parts.append(machine.freeDiskBytes.map { "磁盘剩余 " + ModelFitCopy.formatBytes($0) }
+            ?? "磁盘剩余未知")
+        return GTPanelRow(title: "这台机器", subtitle: parts.joined(separator: " · ")) {
+            Image(systemName: "cpu").foregroundStyle(GTGlassPalette.secondaryText)
         }
     }
 
@@ -372,23 +449,53 @@ struct SettingsView: View {
     private func catalogRow(_ entry: ModelCatalogEntry, installedIDs: Set<String>) -> some View {
         let ec = EngineController.shared
         let installed = installedIDs.contains(entry.id)
+        // 下载错误优先级不变：有错先显示错。没有错时显示判定——体积 · 内存占比 · 档位，
+        // 磁盘有话说时再加一段（两条轴都留在这一行里）。
+        let verdict = ec.fitVerdict(for: entry.id)
+        let subtitleText: Text = {
+            if let error = ec.modelDownloadErrors[entry.id] { return Text(error) }
+            guard let verdict else { return Text(ModelFitCopy.formatBytes(entry.bytesOnDisk)) }
+            return fitSubtitle(verdict)
+        }()
         return modelRow(title: entry.displayName,
-                        subtitle: ec.modelDownloadErrors[entry.id] ?? formatBytes(entry.estimatedBytes),
+                        subtitleText: subtitleText,
                         active: installed && ec.selectedModelID == entry.id,
                         installed: installed,
                         downloading: ec.downloadingModelID == entry.id,
                         downloadProgress: ec.downloadProgress,
                         tps: ec.lastTokensPerSecond[entry.id],
                         switchAction: { trySwitchModel(to: entry.id) },
-                        downloadAction: { ec.downloadModel(id: entry.id) },
+                        downloadAction: { startDownload(entry) },
                         deleteAction: {
                             pendingModelDeletion = entry
                         })
             .help("模型仓库：\(entry.repo)")
     }
 
+    /// 「体积 · 占比 · ● 档位」，档位前面那个点按档位着色：绿=合适、黄=偏紧、红=吃力。
+    /// 颜色只是让人一眼分出层次，含义仍由后面那两个字承担——色盲用户读到的东西不少一分。
+    private func fitSubtitle(_ verdict: ModelFitVerdict) -> Text {
+        // 指示灯前不放「·」：那是两个挨着的圆点，分隔符的活已经由灯本身干了。
+        var text = Text(ModelFitCopy.sizeAndShare(for: verdict) + "\u{2002}")
+        text = text + Text(Image(systemName: "circle.fill"))
+            .font(.system(size: 7))
+            .foregroundColor(indicatorColor(for: verdict.memory))
+        text = text + Text(" " + ModelFitCopy.label(for: verdict.memory))
+        let diskNote = ModelFitCopy.note(for: verdict.disk)
+        if !diskNote.isEmpty { text = text + Text(" · " + diskNote) }
+        return text
+    }
+
+    private func indicatorColor(for fit: ModelMemoryFit) -> Color {
+        switch fit {
+        case .comfortable: GTGlassPalette.semanticReady
+        case .tight: GTGlassPalette.semanticCaution
+        case .strained: GTGlassPalette.semanticRed
+        }
+    }
+
     private func modelRow(title: String,
-                          subtitle: String,
+                          subtitleText: Text,
                           active: Bool,
                           installed: Bool = true,
                           downloading: Bool = false,
@@ -397,7 +504,7 @@ struct SettingsView: View {
                           switchAction: @escaping () -> Void,
                           downloadAction: (() -> Void)? = nil,
                           deleteAction: (() -> Void)? = nil) -> some View {
-        GTPanelRow(title: title, subtitle: subtitle) {
+        GTPanelRow(title: title, subtitleText: subtitleText) {
             modelTrailingSlot {
                 if active {
                     HStack(spacing: GTGlassTokens.Space.s) {
@@ -463,6 +570,36 @@ struct SettingsView: View {
             .accessibilityHidden(true)
     }
 
+    /// 点「下载」之后走哪条路，由判定的 `downloadAction` 一处决定，不在这里重新推导。
+    /// 三个取值各自的出口都在内核里定义好了，视图只负责接线。
+    private func startDownload(_ entry: ModelCatalogEntry) {
+        let ec = EngineController.shared
+        guard let verdict = ec.fitVerdict(for: entry.id) else {
+            ec.downloadModel(id: entry.id)
+            return
+        }
+        switch verdict.downloadAction {
+        case .blocked:
+            diskBlockedMessage = ModelFitCopy.blockedMessage(for: verdict)
+        case .confirmFirst:
+            pendingStrainedDownload = entry
+        case .proceed:
+            ec.downloadModel(id: entry.id)
+        }
+    }
+
+    private func confirmStrainedDownload() {
+        guard let entry = pendingStrainedDownload else { return }
+        pendingStrainedDownload = nil
+        EngineController.shared.downloadModel(id: entry.id)
+    }
+
+    private var strainedConfirmationMessage: String {
+        guard let entry = pendingStrainedDownload,
+              let verdict = EngineController.shared.fitVerdict(for: entry.id) else { return "" }
+        return ModelFitCopy.confirmationMessage(for: verdict, displayName: entry.displayName)
+    }
+
     private var deletionConfirmationMessage: String {
         guard let entry = pendingModelDeletion else { return "" }
         return "将从本机删除“\(entry.displayName)”。需要时可以重新下载。"
@@ -484,6 +621,9 @@ struct SettingsView: View {
     }
 
     private func reloadSettings() {
+#if DEBUG
+        GTDebugScreenshotFixture.applyFitFixtureIfRequested()
+#endif
         let loaded = AppSettings.load()
         settings = loaded
         targetForChineseText = loaded.targetForChinese
@@ -495,6 +635,8 @@ struct SettingsView: View {
 
     private func refreshInstalledModels() {
         installed = EngineController.shared.installedModels()
+        // 磁盘剩余会变，所以在设置页出现时和一次下载完成后重算，不轮询（设计「设置页」）。
+        EngineController.shared.refreshModelFits()
     }
 
     private enum LanguageField { case chinese, defaultTarget }
@@ -559,26 +701,16 @@ struct SettingsView: View {
             .frame(width: GTSettingsControlMetrics.compactFieldWidth)
     }
 
-    private func formatBytes(_ bytes: UInt64) -> String {
-        if bytes < 1_073_741_824 {
-            return "约 \(Int((Double(bytes) / 1_048_576).rounded())) MB"
-        }
-        return String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        if bytes < 1_073_741_824 {
-            return String(format: "%.1f MB", Double(bytes) / 1_048_576)
-        }
-        return String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
-    }
-
     private func downloadText(_ progress: DownloadProgress) -> String {
         let pct = Int(progress.fraction * 100)
         guard let total = progress.totalBytes, let done = progress.completedBytes else {
             return "下载中 \(pct)%"
         }
-        return "下载中 \(pct)% · \(formatBytes(done)) / \(formatBytes(total))"
+        // 分子分母同一个十进制口径。此前这里走的是本文件私有的 `Int64` 重载，它的 MB 分支
+        // 按 1 048 576 换算却标注 MB，于是下载的前 1.07 GB 里分子偏小——E4B 下到 5 亿字节
+        // 时写「476.8 MB / 5.2 GB」，十进制应是 500 MB（I34，I28 漏掉的那一半）。
+        return "下载中 \(pct)% · \(ModelFitCopy.formatBytes(UInt64(max(0, done))))"
+            + " / \(ModelFitCopy.formatBytes(UInt64(max(0, total))))"
     }
 
     static var serviceShortcutGlyphs: String {

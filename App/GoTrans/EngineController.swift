@@ -31,10 +31,40 @@ final class EngineController {
     /// 当前选中的模型 ID（镜像 AppSettings.selectedModelID，供 Task 8 UI 绑定）
     private(set) var selectedModelID: String?
 
+    // MARK: - 机器画像与判定
+
+    /// 探测到的机器画像。物理内存与性能核数是常量，磁盘剩余会变，所以在设置页出现时与
+    /// 一次下载完成后重算，**不轮询**——一个每秒跳动的数字会把估算变成噪音。
+    private(set) var machineProfile: MachineProfile = MachineProbe.current()
+    /// 每个 catalog 条目的判定，按 id 索引。行内渲染直接读它，不在 body 里现算——
+    /// `MachineProbe.current()` 要做 sysctl 与卷属性 I/O，放进 body 会每次重绘都走一遍。
+    private(set) var modelFitVerdicts: [String: ModelFitVerdict] = [:]
+
+    /// 覆盖机器画像。**仅供 Debug 的渲染夹具**：三个内存档位里的「偏紧」「吃力」和磁盘不足态
+    /// 在任何一台能装 GoTrans 的机器上都不会出现（D19），不刻意喂一个假画像就没人在用户
+    /// 之前看过它们长什么样。nil 表示用真实探测值。
+    func overrideMachineProfile(_ profile: MachineProfile?) {
+        machineProfileOverride = profile
+        refreshModelFits()
+    }
+    private var machineProfileOverride: MachineProfile?
+
+    /// 重新探测并重算全表判定。
+    func refreshModelFits() {
+        machineProfile = machineProfileOverride ?? MachineProbe.current()
+        modelFitVerdicts = Dictionary(
+            uniqueKeysWithValues: ModelCatalog.entries.map {
+                ($0.id, ModelFitEvaluator.evaluate(entry: $0, machine: machineProfile))
+            })
+    }
+
+    func fitVerdict(for id: String) -> ModelFitVerdict? { modelFitVerdicts[id] }
+
     private init() {
         let loaded = AppSettings.load()
         self.settings = loaded
         self.selectedModelID = loaded.selectedModelID
+        refreshModelFits()
     }
 
     func start() {
@@ -56,8 +86,7 @@ final class EngineController {
         }
         guard InstalledModels.isInstalled(
             id: selectedID,
-            base: TranslationEngine.defaultModelBase(),
-            legacyHuggingFaceHub: InstalledModels.defaultLegacyHuggingFaceHub
+            base: TranslationEngine.defaultModelBase()
         ) else {
             engine = nil
             loadTask = nil
@@ -139,8 +168,7 @@ final class EngineController {
         guard ActiveModelResolver.resolve(selectedID: id) != nil,
               InstalledModels.isInstalled(
                 id: id,
-                base: TranslationEngine.defaultModelBase(),
-                legacyHuggingFaceHub: InstalledModels.defaultLegacyHuggingFaceHub
+                base: TranslationEngine.defaultModelBase()
               ) else {
             return .notInstalled
         }
@@ -177,20 +205,13 @@ final class EngineController {
             GTLog.info("delete refused: \(id) is the active model")
             return
         }
-        try? InstalledModels.delete(
-            id: id,
-            base: TranslationEngine.defaultModelBase(),
-            legacyHuggingFaceHub: InstalledModels.defaultLegacyHuggingFaceHub
-        )
+        try? InstalledModels.delete(id: id, base: TranslationEngine.defaultModelBase())
         GTLog.info("deleted model \(id)")
     }
 
     /// 设置页展示用：扫描默认目录下已完整安装的 catalog 模型（带磁盘体积）。
     func installedModels() -> [InstalledModel] {
-        InstalledModels.scan(
-            base: TranslationEngine.defaultModelBase(),
-            legacyHuggingFaceHub: InstalledModels.defaultLegacyHuggingFaceHub
-        )
+        InstalledModels.scan(base: TranslationEngine.defaultModelBase())
     }
 
     // MARK: - 后台下载（只下不切，与正在用的模型并存）
@@ -217,6 +238,7 @@ final class EngineController {
                     Task { @MainActor in EngineController.shared.downloadProgress = p }
                 }
                 GTLog.info("background download done: \(id)")
+                self.refreshModelFits()          // 磁盘剩余变了
                 if self.selectedModelID == id {
                     self.start()
                 }
@@ -224,6 +246,10 @@ final class EngineController {
                 GTLog.error("background download failed \(id): \(error)")
                 if let downloadError = error as? ModelDownloadError {
                     switch downloadError {
+                    case .insufficientDiskSpace(let needed, let free):
+                        // 差额给出来，用户才知道要清多少，而不是「失败了，再试试」。
+                        self.modelDownloadErrors[id] =
+                            "磁盘空间不足，还差 \(ModelFitCopy.formatBytes(UInt64(max(0, needed - free))))"
                     case .checksumMismatch, .sizeMismatch:
                         self.modelDownloadErrors[id] = "模型文件校验失败，请重试"
                     default:
