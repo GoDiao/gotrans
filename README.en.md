@@ -43,10 +43,17 @@ No model is downloaded automatically — pick one in settings first, see [Models
 Nothing is downloaded on first launch. Open **设置 › 模型** (Settings › Models), pick one, download
 it, then set it as the active model.
 
+The settings page annotates every model for this machine: its size, the share of memory it would
+take, and whether that is comfortable, tight or strained. It blocks a download only when the disk
+cannot hold it — the memory side is an estimate and only advises, never preventing you from
+downloading a model.
+
 | Model | Size | Notes |
 | --- | ---: | --- |
+| Qwen3.5 9B (4-bit) | ~6.0 GB | General purpose, the largest here |
 | Gemma 4 E4B (4-bit) | ~5.2 GB | General purpose; also powers the free-form text actions |
 | Gemma 4 E2B (4-bit) | ~3.6 GB | Smaller general-purpose option |
+| Qwen3.5 4B (4-bit) | ~3.1 GB | General purpose, smaller than Gemma 4 E2B |
 | Hy-MT2 1.8B (8-bit) | ~1.9 GB | Translation-specialised |
 | Hy-MT2 1.8B (4-bit) | ~1.0 GB | Translation-specialised |
 | Hy-MT2 1.8B (2-bit) | ~601 MB | Translation-specialised, curated GGUF |
