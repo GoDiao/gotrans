@@ -43,6 +43,11 @@ No model is downloaded automatically — pick one in settings first, see [Models
 Nothing is downloaded on first launch. Open **设置 › 模型** (Settings › Models), pick one, download
 it, then set it as the active model.
 
+The settings page annotates every model for this machine: its size, the share of memory it would
+take, and whether that is comfortable, tight or strained. It blocks a download only when the disk
+cannot hold it — the memory side is an estimate and only advises, never preventing you from
+downloading a model.
+
 | Model | Size | Notes |
 | --- | ---: | --- |
 | Qwen3.5 9B (4-bit) | ~6.0 GB | General purpose, the largest here |
