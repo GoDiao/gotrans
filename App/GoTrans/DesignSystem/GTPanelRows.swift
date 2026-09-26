@@ -41,6 +41,8 @@ struct GTPanelDivider: View {
 struct GTPanelRow<Trailing: View>: View {
     var title: String
     var subtitle: String? = nil
+    /// 需要在副标题里给某一段单独着色时用它（模型行的档位指示灯）。给了就优先于 `subtitle`。
+    var subtitleText: Text? = nil
     var error: String? = nil
     @ViewBuilder var trailing: () -> Trailing
 
@@ -50,7 +52,12 @@ struct GTPanelRow<Trailing: View>: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .foregroundStyle(error == nil ? .primary : GTGlassPalette.semanticRed)
-                    if let subtitle {
+                    if let subtitleText {
+                        subtitleText
+                            .font(.caption)
+                            .foregroundStyle(GTGlassPalette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let subtitle {
                         Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(GTGlassPalette.secondaryText)

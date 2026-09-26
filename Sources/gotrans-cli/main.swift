@@ -22,32 +22,19 @@ let settings = AppSettings.load()
 let mode = CommandLine.arguments.dropFirst().first ?? "serve"
 
 switch mode {
-case "spike":
-    // 可行性验证：经统一引擎跑一次流式翻译（首次自动下载模型）
-    let clock = ContinuousClock()
-    let engine = TranslationEngine(settings: settings)
-    do {
-        let loadStart = clock.now
-        try await engine.load { p in
-            printDownloadProgress(p)
-        }
-        print("\nModel ready in \(clock.now - loadStart)")
-        let genStart = clock.now
-        let result = try await engine.translate(
-            "The quick brown fox jumps over the lazy dog.", target: nil)
-        for try await chunk in result.chunks {
-            print(chunk, terminator: "")
-        }
-        print("\n--- spike OK (\(clock.now - genStart)) ---")
-    } catch {
-        print("SPIKE FAILED: \(error)")
-        exit(1)
-    }
 case "serve":
+    // 模型取自用户在设置里选中的那个，与 app 同源（EngineController.start）。
+    // 没选过就不猜：隐式下载几个 G 正是这个项目要消除的东西。
+    guard let selectedID = settings.selectedModelID,
+          let resolved = ActiveModelResolver.resolve(
+            selectedID: selectedID, parameterSettings: settings) else {
+        print("尚未选择模型。先在 GoTrans 设置里选一个，或用 gotrans-cli engine-translate <model-id> <cache-dir>。")
+        exit(2)
+    }
     let engine = TranslationEngine(settings: settings)
-    print("Loading model (首次自动下载约 1.5-2.4GB)…")
+    print("Loading \(resolved.entry.displayName)…")
     do {
-        try await engine.load { p in
+        try await engine.load(resolved: resolved) { p in
             printDownloadProgress(p)
         }
     } catch {
@@ -57,37 +44,65 @@ case "serve":
     print("Model ready. Listening on http://127.0.0.1:\(settings.port)")
     let api = APIServer(translator: engine, port: settings.port)
     try await api.run()
-case "download-e2b":
-    // iOS 真机配套：国内网络 HF Xet CDN（cas-bridge.xethub.hf.co）被墙、hf-mirror 已失效，
-    // 手机端直连 HF 不可达。此命令在 Mac 上用与 iOS 完全相同的代码路径（ModelDownloader
-    // 快照布局 + E2B 档）下载到指定目录，再经 devicectl 推入手机 App Group 容器。
+case "download":
+    // 把指定 catalog 模型下载到指定目录并验证可加载（含预热）。原名 download-e2b，
+    // 是 iOS 真机配套、硬编码 E2B 档；iOS 已从仓库删除（RULES.md），档位覆盖也随
+    // ModelVariant 一起消失，于是它退化成「按 id 下载到指定目录」这件仍然有用的事。
     // 第三个参数选下载源：hf（HuggingFace）| ms（ModelScope，默认，国内可达且支持断点续传）。
-    let args = CommandLine.arguments.dropFirst(2)
-    guard let dir = args.first else {
-        print("usage: gotrans-cli download-e2b <cache-dir> [hf|ms]")
+    let args = Array(CommandLine.arguments.dropFirst(2))
+    guard args.count >= 2 else {
+        print("usage: gotrans-cli download <model-id> <cache-dir> [hf|ms]")
+        exit(2)
+    }
+    guard let resolved = ActiveModelResolver.resolve(
+        selectedID: args[0], parameterSettings: settings) else {
+        print("unknown model id: \(args[0])")
         exit(2)
     }
     let source: ModelSource
-    switch args.dropFirst().first ?? "ms" {
+    switch args.count >= 3 ? args[2] : "ms" {
     case "hf": source = .huggingFace
     case "ms": source = .modelScope
     default:
-        print("usage: gotrans-cli download-e2b <cache-dir> [hf|ms]")
+        print("usage: gotrans-cli download <model-id> <cache-dir> [hf|ms]")
         exit(2)
     }
     let engine = TranslationEngine(settings: settings)
     do {
         try await engine.load(
-            cacheDirectory: URL(fileURLWithPath: dir),
-            modelSource: source,
-            tuningOverride: EngineTuning(variant: .gemma4E2B4bit, maxTokens: 1024, maxInputChars: 700)
+            resolved: resolved,
+            cacheDirectory: URL(fileURLWithPath: args[1]),
+            modelSource: source
         ) { p in
             printDownloadProgress(p)
         }
-        print("\nE2B 下载完成且已验证可加载（含预热）：\(dir)")
+        print("\n\(resolved.entry.displayName) 下载完成且已验证可加载（含预热）：\(args[1])")
     } catch {
         print("DOWNLOAD FAILED: \(error)")
         exit(1)
+    }
+case "fit":
+    // 不下载任何模型，就打印这台机器（或任意一台指定的机器）对全表的判定。
+    // 全程只读 sysctl 与卷属性，体积是编译进来的常量，因此断网可用（D16）。
+    let args = Array(CommandLine.arguments.dropFirst(2))
+    let overrides: ModelFitReport.Overrides
+    do {
+        overrides = try ModelFitReport.parseOverrides(args)
+    } catch {
+        print((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        print("usage: gotrans-cli fit [--ram <GiB>] [--cores <N>] [--disk <GB>] [--json]")
+        exit(2)
+    }
+    let machine = ModelFitReport.apply(overrides, to: MachineProbe.current())
+    if args.contains("--json") {
+        do {
+            print(try ModelFitReport.json(machine: machine))
+        } catch {
+            print("JSON 输出失败: \(error)")
+            exit(1)
+        }
+    } else {
+        print(ModelFitReport.text(machine: machine))
     }
 case "hunyuan-spike":
     // Plan A 决策门：注册混元类型 → 从本地目录加载 Hy-MT2 → 跑一次生成，人工核对输出。
@@ -129,7 +144,7 @@ case "engine-translate":
             modelSource: .modelScope
         ) { p in printDownloadProgress(p) }
         let text = args.count >= 3 ? args[2] : "今天天气很好，我们一起去公园散步吧。"
-        print("\n--- translate via engine (family=\(resolved.entry.family.rawValue)) ---")
+        print("\n--- translate via engine (purpose=\(resolved.entry.purpose.rawValue)) ---")
         let result = try await engine.translate(text, target: nil)
         for try await chunk in result.chunks { print(chunk, terminator: "") }
         print("\n--- engine-translate OK (detected=\(result.detected) target=\(result.target)) ---")
@@ -138,6 +153,14 @@ case "engine-translate":
         exit(1)
     }
 default:
-    print("usage: gotrans-cli [spike|serve|hunyuan-spike <model-dir> [text]|engine-translate <model-id> <cache-dir> [text]|download-e2b <cache-dir> [hf|ms]]")
+    print("""
+usage: gotrans-cli <command>
+  fit [--ram <GiB>] [--cores <N>] [--disk <GB>] [--json]
+                                                 打印全表判定，不下载任何东西
+  serve                                          默认。按设置里选中的模型起本地 API
+  engine-translate <model-id> <cache-dir> [text] 按 id 加载并翻译一次
+  download <model-id> <cache-dir> [hf|ms]        下载指定模型到指定目录
+  hunyuan-spike <model-dir> [text]               不经引擎，直接跑一次混元生成
+""")
     exit(2)
 }

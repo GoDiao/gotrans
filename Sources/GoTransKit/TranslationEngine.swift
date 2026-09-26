@@ -17,9 +17,14 @@ public actor TranslationEngine: TranslationService {
     private var acceptingGeneration = true
     private let detector = LanguageDetector()
     private var resolvedTuning: EngineTuning?
-    /// 当前活跃模型的 family，决定 prompt 策略：Gemma 用 systemPrompt；Hy-MT2（混元）按其
-    /// 推荐格式只发 user 指令、不用 system（spike 验证：无 system 译文最稳）。
-    private var activeFamily: ModelFamily = .gemma
+    /// 当前活跃模型的 catalog 条目。prompt 策略、通用处理准入、架构注册各读它的一个属性，
+    /// 三者互不蕴含。未加载时的取值不可达——translate 与 process 都先要求模型已就绪。
+    private var activeEntry: ModelCatalogEntry?
+
+    private var activeUsesSystemPrompt: Bool { activeEntry?.usesSystemPrompt ?? true }
+    private var activeAllowsGeneralProcessing: Bool {
+        activeEntry.map(\.purpose.allowsGeneralProcessing) ?? true
+    }
 
     /// 上一次生成的速度（生成 token 数 / 生成耗时），供 UI 观察性能；nil 表示尚无生成。
     public private(set) var lastTokensPerSecond: Double?
@@ -37,109 +42,11 @@ public actor TranslationEngine: TranslationService {
 
     public var isReady: Bool { model != nil || llamaRuntime != nil }
 
-    /// 加载模型（首次自动下载，progress 回调驱动 UI 显示百分比 + 已下/总字节量）
-    /// - Parameter cacheDirectory: 模型缓存目录。非 nil（iOS/CLI）走自研 ModelDownloader
-    ///   （双源 + 断点续传 + 字节级进度），iOS 传 App Group 容器目录使主 app 与翻译扩展
-    ///   共享同一份模型文件；nil（macOS）走默认目录三级策略（见 load 内注释）：
-    ///   新快照 → legacy HF 缓存（存量用户不重下）→ 自研下载器。
-    /// - Parameter modelSource: 可选固定下载源；nil 时 Hugging Face 优先、失败自动回退 ModelScope。
-    /// - Parameter tuningOverride: 非 nil 时直接采用，跳过 autoTuning/manual 推导。
-    ///   iOS 用它固定 E2B 档——autoTuning 在 16GB 设备会选 E4B，与 iOS 侧固定的
-    ///   E2B 仓库目录判定错位；nil 时行为与既有 macOS 调用完全一致。
-    /// - Parameter useCPU: spike 用。true 时把 MLX 全局默认设备切到 CPU，绕开后台 GPU
-    ///   不可用（iPhone 全系 BGTaskScheduler.supportedResources 不含 .gpu，Metal 后台
-    ///   被 accessRevoked 崩溃）。默认 false，行为与既有调用完全一致（GPU）。
-    ///   setDefault 是进程级全局，actor 内设一次即可。
-    public func load(
-        cacheDirectory: URL? = nil,
-        modelSource: ModelSource? = nil,
-        tuningOverride: EngineTuning? = nil,
-        useCPU: Bool = false,
-        progress: @Sendable @escaping (DownloadProgress) -> Void = { _ in }
-    ) async throws {
-        if useCPU {
-            // 进程级全局默认设备切 CPU。Device.setDefault 虽标 deprecated，但它是唯一
-            // 真正翻转「全局默认」的 setter（写 _defaultDevice，被 TaskLocal 默认值
-            // _resolveGlobalDefaultDevice() 读取，最终经 StreamOrDevice.default → CPU
-            // stream 驱动算子）；withDefaultDevice 只能 scoped 到闭包，跨 actor 内
-            // 生成 Task 包不住，故 spike 取全局 setter。
-            MLX.Device.setDefault(device: MLX.Device(.cpu))
-            GTLog.info("[spike-cpu] MLX device set to CPU")
-        }
-        let tuning: EngineTuning
-        if let tuningOverride {
-            tuning = tuningOverride
-            GTLog.info("override tuning: variant=\(tuning.variant.rawValue) maxTokens=\(tuning.maxTokens) input=\(tuning.maxInputChars)")
-        } else if settings.autoTuning {
-            let auto = EngineTuning.recommended(
-                physicalMemory: SystemMemory.physical(),
-                availableMemory: SystemMemory.available()
-            )
-            GTLog.info("auto tuning: variant=\(auto.variant.rawValue) maxTokens=\(auto.maxTokens) input=\(auto.maxInputChars) " +
-                       "(ram=\(SystemMemory.physical() >> 30)GB avail=\((SystemMemory.available() ?? 0) >> 30)GB)")
-            // 本地优先纠偏仅对 cacheDirectory==nil（macOS 默认目录）路径生效：
-            // 自定义目录（iOS/CLI）走 tuningOverride 不进此分支，且其本地缓存位置不同
-            tuning = cacheDirectory == nil ? Self.preferLocalModel(over: auto) : auto
-        } else {
-            tuning = EngineTuning(
-                variant: .gemma4E4B4bit,
-                maxTokens: settings.manualMaxTokens,
-                maxInputChars: settings.maxInputChars
-            )
-            GTLog.info("manual tuning: maxTokens=\(tuning.maxTokens) input=\(tuning.maxInputChars)")
-        }
-        activeFamily = .gemma
-        resolvedTuning = tuning
-
-        let configuration =
-            switch tuning.variant {
-            case .gemma4E4B4bit: LLMRegistry.gemma4_e4b_it_4bit
-            case .gemma4E2B4bit: LLMRegistry.gemma4_e2b_it_4bit
-            }
-        let repo = Self.repoName(for: tuning.variant)
-        let loaded: ModelContainer
-        if let cacheDirectory {
-            // 自研下载路径（iOS/CLI 显式传目录）：快照不完整才触发下载；未固定来源时自动换源
-            let snapshotDir = ModelDownloader.snapshotDirectory(in: cacheDirectory, repo: repo)
-            if !ModelDownloader.isComplete(snapshotDir) {
-                _ = try await ModelDownloader.download(
-                    repo: repo, from: modelSource, into: cacheDirectory, progress: progress)
-            }
-            // 本地目录加载：EOS 等生成配置由快照内 generation_config.json 提供
-            loaded = try await loadModelContainer(
-                from: snapshotDir, using: #huggingFaceTokenizerLoader())
-        } else {
-            // macOS 默认路径三级策略：
-            // 1. 新快照已完整 → 直接本地加载（新装用户经自研下载器落盘后的常态）；
-            // 2. legacy HF 缓存已有该仓库 → 维持原 HF 宏路径离线加载——存量用户的模型
-            //    在 ~/.cache/huggingface 里，强切新目录会让他们白下 GB 级权重；
-            // 3. 都没有 → 自研 ModelDownloader 下载到默认目录后本地加载。不再走
-            //    HubClient 下载（其进度回调在大文件期间长期不动 + HF Xet CDN 国内被墙）。
-            let base = Self.defaultModelDirectory()
-            let snapshotDir = ModelDownloader.snapshotDirectory(in: base, repo: repo)
-            if ModelDownloader.isComplete(snapshotDir) {
-                loaded = try await loadModelContainer(
-                    from: snapshotDir, using: #huggingFaceTokenizerLoader())
-            } else if Self.legacyHFCacheHasModel(repo: repo) {
-                loaded = try await #huggingFaceLoadModelContainer(configuration: configuration) { p in
-                    // HF 宏路径只有比例没有字节数：completed/total 置 nil，UI 退化为只显示百分比
-                    progress(DownloadProgress(fraction: p.fractionCompleted))
-                }
-            } else {
-                let dir = try await ModelDownloader.download(
-                    repo: repo, from: modelSource, into: base, progress: progress)
-                loaded = try await loadModelContainer(
-                    from: dir, using: #huggingFaceTokenizerLoader())
-            }
-        }
-        try await finishLoading(loaded, label: configuration.name)
-    }
-
-    /// 加载指定 ResolvedModel（按 entry.repo 下载/加载，按 entry.family 分发）。
+    /// 加载指定 ResolvedModel（按 entry.repo 下载/加载，按 entry.architecture 分发）。
     /// 所有既有调用方（EngineController / EngineHolder / CLI）继续使用旧签名，两者互不影响。
     /// - Parameter resolved: 已解析的模型条目 + 调优参数（由 ActiveModelResolver 产出）。
-    /// - Parameter cacheDirectory: 非 nil 时走自研 ModelDownloader（iOS/CLI）；nil 时走 macOS 三级策略。
-    ///   macOS 同样使用三级策略：新快照 → 旧版 HF 缓存 → 自研下载器，避免升级用户重下模型。
+    /// - Parameter cacheDirectory: 非 nil 时走自研 ModelDownloader（iOS/CLI）；nil 时走 macOS 默认目录。
+    ///   两者都是：新快照完整则本地加载，否则自研下载器下载后加载。
     /// - Parameter modelSource: 可选固定下载源；nil 时 Hugging Face 优先、失败自动回退 ModelScope。
     /// - Parameter useCPU: spike 用；true 时切 MLX 全局默认设备到 CPU。
     /// - Parameter progress: 下载进度回调。
@@ -155,9 +62,9 @@ public actor TranslationEngine: TranslationService {
             GTLog.info("[spike-cpu] MLX device set to CPU")
         }
         resolvedTuning = resolved.tuning
-        activeFamily = resolved.entry.family
+        activeEntry = resolved.entry
         GTLog.info("load(resolved:) entry=\(resolved.entry.id) repo=\(resolved.entry.repo) " +
-                   "family=\(resolved.entry.family.rawValue)")
+                   "purpose=\(resolved.entry.purpose.rawValue)")
 
         let repo = resolved.entry.repo
         let base = cacheDirectory ?? Self.defaultModelDirectory()
@@ -186,35 +93,19 @@ public actor TranslationEngine: TranslationService {
             return
         }
 
-        let canLoadLegacyGemma = cacheDirectory == nil
-            && resolved.entry.family == .gemma
-            && InstalledModels.legacyCacheHasModel(
-                repo: repo,
-                hub: InstalledModels.defaultLegacyHuggingFaceHub
-            )
-        if !ModelDownloader.isComplete(snapshotDir, for: resolved.entry) && !canLoadLegacyGemma {
+        if !ModelDownloader.isComplete(snapshotDir, for: resolved.entry) {
             _ = try await ModelDownloader.download(
                 entry: resolved.entry, from: modelSource, into: base, progress: progress)
         }
 
         let loaded: ModelContainer
-        switch resolved.entry.family {
-        case .gemma:
-            if canLoadLegacyGemma && !ModelDownloader.isComplete(snapshotDir, for: resolved.entry) {
-                let configuration = switch resolved.tuning.variant {
-                case .gemma4E4B4bit: LLMRegistry.gemma4_e4b_it_4bit
-                case .gemma4E2B4bit: LLMRegistry.gemma4_e2b_it_4bit
-                }
-                loaded = try await #huggingFaceLoadModelContainer(configuration: configuration) { p in
-                    progress(DownloadProgress(fraction: p.fractionCompleted))
-                }
-            } else {
-                loaded = try await loadModelContainer(
-                    from: snapshotDir,
-                    using: #huggingFaceTokenizerLoader()
-                )
-            }
-        case .hunyuanMT2:
+        switch resolved.entry.architecture {
+        case .builtIn:
+            loaded = try await loadModelContainer(
+                from: snapshotDir,
+                using: #huggingFaceTokenizerLoader()
+            )
+        case .hunyuan:
             // 混元架构不在 Swift MLXLLM 内置类型表，加载前注册自定义类型（幂等）。
             await registerHunyuanIfNeeded()
             loaded = try await loadModelContainer(from: snapshotDir, using: #huggingFaceTokenizerLoader())
@@ -222,6 +113,18 @@ public actor TranslationEngine: TranslationService {
 
         try await finishLoading(loaded, label: resolved.entry.repo)
     }
+
+    /// 传给 chat template 的 kwargs，用来关掉模板的思考分支。
+    ///
+    /// Qwen3.5 两款的 `chat_template.jinja` 默认开着 think（`enable_thinking is defined and
+    /// enable_thinking is false` 才是关），不传这个参数的话每次划词都会先思考一轮、推理过程
+    /// 直接流进浮窗（D26）。上游把 `additionalContext` 当 kwargs 传进
+    /// `tokenizer.applyChatTemplate`（`LLMModelFactory.swift:495`），是支持的路径不是绕路。
+    ///
+    /// `process()` 那条本可以不传——文本助手正是 think 更有用的地方——但它目前零生产调用方
+    /// （D3 把入口推后了），留一个没人见过的分歧行为不如先统一。D3 的入口回来时这条要重新问
+    /// 用户，那才是真正的产品决策时点（D27，临时决定）。
+    private static let templateContext: [String: any Sendable] = ["enable_thinking": false]
 
     /// 预热 + 置 ready + 回收缓冲。两个 load 入口共用。
     private func finishLoading(_ container: ModelContainer, label: String) async throws {
@@ -255,7 +158,8 @@ public actor TranslationEngine: TranslationService {
         let input = truncated ? String(trimmed.prefix(maxChars)) : trimmed
         let plan = detector.plan(for: input, target: target, settings: settings)
         let request = TranslationPromptRequest(text: input, detected: plan.detected,
-                                               target: plan.target, family: activeFamily)
+                                               target: plan.target,
+                                               usesSystemPrompt: activeUsesSystemPrompt)
         let composed = try promptProvider?.prompt(for: request) ?? request.defaultPrompt
         let prompt = composed.user
         let maxTokens = resolvedTuning?.maxTokens ?? 2048
@@ -275,14 +179,15 @@ public actor TranslationEngine: TranslationService {
         }
         guard let model else { throw TranslationError.modelNotLoaded }
         // Gemma 用固定系统指令；Hy-MT2 按推荐只发 user 指令（无 system）。
-        // 先 capture 到局部，避免下面的 Task 闭包访问 actor 隔离的 activeFamily。
-        let instructions = activeFamily == .gemma ? composed.system : nil
+        // 先 capture 到局部，避免下面的 Task 闭包访问 actor 隔离的状态。
+        let instructions = activeUsesSystemPrompt ? composed.system : nil
         let contextTokens = modelContextTokens
         let inputTokens = try await model.perform { context in
             var messages: [Chat.Message] = []
             if let instructions { messages.append(.system(instructions)) }
             messages.append(.user(prompt))
-            let prepared = try await context.processor.prepare(input: UserInput(chat: messages))
+            let prepared = try await context.processor.prepare(
+                input: UserInput(chat: messages, additionalContext: Self.templateContext))
             return prepared.text.tokens.size
         }
         try TranslationPromptBudget.validate(inputTokens: inputTokens, outputTokens: maxTokens,
@@ -304,7 +209,8 @@ public actor TranslationEngine: TranslationService {
                     model,
                     instructions: instructions,
                     generateParameters: GenerateParameters(
-                        maxTokens: maxTokens, temperature: 0.1, repetitionPenalty: 1.1)
+                        maxTokens: maxTokens, temperature: 0.1, repetitionPenalty: 1.1),
+                    additionalContext: Self.templateContext
                 )
                 for try await item in session.streamDetails(to: prompt, images: [], videos: []) {
                     try Task.checkCancellation()
@@ -398,7 +304,7 @@ public actor TranslationEngine: TranslationService {
         }
         // 通用文本处理只在通用模型（Gemma）上可靠；Hy-MT2 是翻译专用，喂任意指令易出烂结果，
         // 直接拒绝而非静默跑偏（采纳 Codex 审查）。
-        guard activeFamily == .gemma else {
+        guard activeAllowsGeneralProcessing else {
             throw TranslationError.modelNotSupported("当前为翻译专用模型，不支持通用文本处理，请切换到 Gemma")
         }
         guard let model else { throw TranslationError.modelNotLoaded }
@@ -409,7 +315,7 @@ public actor TranslationEngine: TranslationService {
         let input = trimmed.count > maxChars ? String(trimmed.prefix(maxChars)) : trimmed
         let prompt = PromptBuilder.processUserPrompt(text: input, instruction: instruction)
         let maxTokens = resolvedTuning?.maxTokens ?? 2048
-        let instructions = activeFamily == .gemma ? PromptBuilder.processSystemPrompt : nil
+        let instructions = activeUsesSystemPrompt ? PromptBuilder.processSystemPrompt : nil
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: String.self)
         let generationID = UUID()
@@ -423,7 +329,8 @@ public actor TranslationEngine: TranslationService {
                     model,
                     instructions: instructions,
                     generateParameters: GenerateParameters(
-                        maxTokens: maxTokens, temperature: 0.1, repetitionPenalty: 1.1)
+                        maxTokens: maxTokens, temperature: 0.1, repetitionPenalty: 1.1),
+                    additionalContext: Self.templateContext
                 )
                 for try await item in session.streamDetails(to: prompt, images: [], videos: []) {
                     try Task.checkCancellation()
@@ -475,41 +382,6 @@ public actor TranslationEngine: TranslationService {
         }
     }
 
-    /// repo 由 variant 推导（与 EngineHolder 的 tuningOverride 构成 variant↔repo 名不变量）
-    static func repoName(for variant: ModelVariant) -> String {
-        switch variant {
-        case .gemma4E4B4bit: "mlx-community/gemma-4-e4b-it-4bit"
-        case .gemma4E2B4bit: "mlx-community/gemma-4-e2b-it-4bit"
-        }
-    }
-
-    /// 本地优先纠偏（autoTuning + macOS 默认目录路径）：autoTuning 因可用内存降了档，
-    /// 但降档目标模型本地没有、而按物理内存本该选的更高档模型本地已有
-    /// （新快照完整或 legacy HF 缓存任一）→ 改用更高档。
-    /// 真机现场：16GB Mac 启动时 avail=3GB 被降到 E2B，本地 legacy 缓存只有 E4B(4.9GB)，
-    /// 「省内存」反而触发 3.6GB 下载，且清单请求挂死时菜单永远停在「加载中」。
-    /// 复用本地模型最坏是加载失败（有失败态兜底可重试），强下载最坏是长时间不可用。
-    private static func preferLocalModel(over tuning: EngineTuning) -> EngineTuning {
-        let byRAM = EngineTuning.recommendedByRAM(physicalMemory: SystemMemory.physical())
-        guard byRAM.variant != tuning.variant,
-              !hasLocalModel(for: tuning.variant),
-              hasLocalModel(for: byRAM.variant) else { return tuning }
-        GTLog.info("local-first override: 内存紧张但本地已有 \(byRAM.variant.rawValue)，" +
-                   "优先复用避免下载 \(tuning.variant.rawValue)；内存不足风险由加载失败兜底")
-        return byRAM
-    }
-
-    /// macOS 默认路径下该 variant 的模型本地是否已有：新快照完整 或 legacy HF 缓存非空
-    private static func hasLocalModel(for variant: ModelVariant) -> Bool {
-        let repo = repoName(for: variant)
-        return ModelDownloader.isComplete(
-            ModelDownloader.snapshotDirectory(in: defaultModelDirectory(), repo: repo))
-            || InstalledModels.legacyCacheHasModel(
-                repo: repo,
-                hub: InstalledModels.defaultLegacyHuggingFaceHub
-            )
-    }
-
     /// 暴露默认模型目录给 App 层（EngineController.deleteModel / installedModels 用）
     public static func defaultModelBase() -> URL { defaultModelDirectory() }
 
@@ -543,16 +415,5 @@ public actor TranslationEngine: TranslationService {
             .appendingPathComponent("GoTrans/models", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
-
-    /// legacy HF 缓存（HubClient 默认路径）是否已有该仓库：目录存在且非空。
-    /// 只看目录非空不做完整性校验——旧路径没有完成标记，宽判保住存量用户离线加载；
-    /// 若旧缓存实际损坏，宏路径加载会失败并走上层重试/报错，不会静默吞掉。
-    /// NSHomeDirectory：iOS 无 homeDirectoryForCurrentUser；沙盒下与 HF 宏展开 ~ 同源。
-    private static func legacyHFCacheHasModel(repo: String) -> Bool {
-        InstalledModels.legacyCacheHasModel(
-            repo: repo,
-            hub: InstalledModels.defaultLegacyHuggingFaceHub
-        )
     }
 }

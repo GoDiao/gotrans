@@ -50,56 +50,60 @@ import Foundation
         #expect(!FileManager.default.fileExists(atPath: dir.path))
     }
 
-    @Test func legacyGemmaCacheIsRecognizedAndDeleted() throws {
+    /// D13 删掉了整层 legacy Hugging Face 缓存兼容。旧布局是 `<hub>/models--<owner>--<repo>/`，
+    /// 这里把它直接摆进 base——旧实现会把 base 当 hub 命中，新实现必须完全不看这个约定。
+    /// 半删的后果是 start() 的 isInstalled 守卫放行、随后静默重下 5.2 GB。
+    @Test func legacyCacheLayoutNoLongerCountsAsInstalled() throws {
         let base = tempBase()
-        let legacyHub = tempBase()
-        defer {
-            try? FileManager.default.removeItem(at: base)
-            try? FileManager.default.removeItem(at: legacyHub)
-        }
+        defer { try? FileManager.default.removeItem(at: base) }
         let entry = ModelCatalog.entry(id: "gemma-e4b-4bit")!
-        let legacy = legacyHub.appendingPathComponent(
+        let legacy = base.appendingPathComponent(
             "models--\(entry.repo.replacingOccurrences(of: "/", with: "--"))",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
         try Data(repeating: 0, count: 1024).write(to: legacy.appendingPathComponent("config.json"))
 
-        #expect(InstalledModels.isInstalled(
-            id: entry.id,
-            base: base,
-            legacyHuggingFaceHub: legacyHub
-        ))
-        let found = InstalledModels.scan(base: base, legacyHuggingFaceHub: legacyHub)
-        #expect(found == [InstalledModel(id: entry.id, bytesOnDisk: 1024)])
-
-        try InstalledModels.delete(
-            id: entry.id,
-            base: base,
-            legacyHuggingFaceHub: legacyHub
-        )
-        #expect(!FileManager.default.fileExists(atPath: legacy.path))
+        #expect(!InstalledModels.isInstalled(id: entry.id, base: base))
+        #expect(InstalledModels.scan(base: base).isEmpty)
     }
 
-    @Test func legacyCacheIsNotAppliedToNonGemmaModels() throws {
+    /// 已安装只由「快照目录 + 完成标记且字节数相符」决定，没有第二条认定途径。
+    @Test func installedIsDecidedOnlyByTheSnapshotMarker() throws {
         let base = tempBase()
-        let legacyHub = tempBase()
-        defer {
-            try? FileManager.default.removeItem(at: base)
-            try? FileManager.default.removeItem(at: legacyHub)
-        }
-        let entry = ModelCatalog.entry(id: "hymt2-4bit")!
-        let legacy = legacyHub.appendingPathComponent(
+        defer { try? FileManager.default.removeItem(at: base) }
+        let entry = ModelCatalog.entry(id: "gemma-e4b-4bit")!
+        let dir = ModelDownloader.snapshotDirectory(in: base, repo: entry.repo)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(repeating: 0, count: 2048).write(to: dir.appendingPathComponent("model.safetensors"))
+        // 有权重没标记
+        #expect(!InstalledModels.isInstalled(id: entry.id, base: base))
+
+        // 有标记但字节数对不上
+        let marker = dir.appendingPathComponent(".download-complete")
+        try JSONEncoder().encode(["model.safetensors": Int64(4096)]).write(to: marker)
+        #expect(!InstalledModels.isInstalled(id: entry.id, base: base))
+
+        try JSONEncoder().encode(["model.safetensors": Int64(2048)]).write(to: marker)
+        #expect(InstalledModels.isInstalled(id: entry.id, base: base))
+    }
+
+    /// 删除只动快照目录。旧缓存目录不再被这段代码认识，也就不该被它删掉。
+    @Test func deleteLeavesLegacyShapedDirectoriesAlone() throws {
+        let base = tempBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let entry = ModelCatalog.entry(id: "gemma-e4b-4bit")!
+        let snapshot = ModelDownloader.snapshotDirectory(in: base, repo: entry.repo)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        let legacy = base.appendingPathComponent(
             "models--\(entry.repo.replacingOccurrences(of: "/", with: "--"))",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
-        try Data([1]).write(to: legacy.appendingPathComponent("config.json"))
+        try Data(repeating: 0, count: 1024).write(to: legacy.appendingPathComponent("config.json"))
 
-        #expect(!InstalledModels.isInstalled(
-            id: entry.id,
-            base: base,
-            legacyHuggingFaceHub: legacyHub
-        ))
+        try InstalledModels.delete(id: entry.id, base: base)
+        #expect(!FileManager.default.fileExists(atPath: snapshot.path))
+        #expect(FileManager.default.fileExists(atPath: legacy.path))
     }
 }

@@ -45,11 +45,11 @@ it, then set it as the active model.
 
 | Model | Size | Notes |
 | --- | ---: | --- |
-| Gemma 4 E4B (4-bit) | ~4.9 GB | General purpose; also powers the free-form text actions |
+| Gemma 4 E4B (4-bit) | ~5.2 GB | General purpose; also powers the free-form text actions |
 | Gemma 4 E2B (4-bit) | ~3.6 GB | Smaller general-purpose option |
 | Hy-MT2 1.8B (8-bit) | ~1.9 GB | Translation-specialised |
-| Hy-MT2 1.8B (4-bit) | ~1.1 GB | Translation-specialised |
-| Hy-MT2 1.8B (2-bit) | ~600 MB | Translation-specialised, curated GGUF |
+| Hy-MT2 1.8B (4-bit) | ~1.0 GB | Translation-specialised |
+| Hy-MT2 1.8B (2-bit) | ~601 MB | Translation-specialised, curated GGUF |
 | Hy-MT2 1.8B (1.25-bit) | ~462 MB | Translation-specialised, curated GGUF, smallest |
 
 The two low-bit Hy-MT2 builds are downloaded as a single file pinned to an exact revision, and both

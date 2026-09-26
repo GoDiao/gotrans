@@ -7,7 +7,6 @@ import Foundation
     @Test func explicit_usesEntryDefaults() {
         let r = ActiveModelResolver.resolve(selectedID: "hymt2-8bit")
         #expect(r?.entry.id == "hymt2-8bit")
-        #expect(r?.tuning.variant == .gemma4E2B4bit) // 见实现说明
         #expect(r?.tuning.maxTokens == 1024)
         #expect(r?.tuning.maxInputChars == 1500)
     }
