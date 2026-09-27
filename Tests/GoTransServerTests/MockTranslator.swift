@@ -58,3 +58,22 @@ struct ExplodingTranslator: TranslationService {
         return TranslationStreamResult(detected: "en", target: "zh-Hans", truncated: false, chunks: stream)
     }
 }
+
+struct LocalizedFailingTranslator: TranslationService {
+    enum EngineFailure: Error, LocalizedError {
+        case unavailable
+
+        var errorDescription: String? { "翻译引擎暂不可用。" }
+    }
+
+    var failInStream = false
+
+    var isReady: Bool { get async { true } }
+
+    func translate(_ text: String, target: String?) async throws -> TranslationStreamResult {
+        guard failInStream else { throw EngineFailure.unavailable }
+        let (stream, cont) = AsyncThrowingStream.makeStream(of: String.self)
+        cont.finish(throwing: EngineFailure.unavailable)
+        return TranslationStreamResult(detected: "en", target: "zh-Hans", truncated: false, chunks: stream)
+    }
+}

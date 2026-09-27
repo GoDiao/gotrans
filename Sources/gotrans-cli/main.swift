@@ -89,7 +89,7 @@ case "fit":
     do {
         overrides = try ModelFitReport.parseOverrides(args)
     } catch {
-        print((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        print(userFacingMessage(error))
         print("usage: gotrans-cli fit [--ram <GiB>] [--cores <N>] [--disk <GB>] [--json]")
         exit(2)
     }

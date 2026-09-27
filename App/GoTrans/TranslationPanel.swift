@@ -412,7 +412,7 @@ final class TranslationViewModel {
                 if output.isEmpty { status = "已停止" }
             } catch {
                 guard currentGeneration == generation else { return }
-                let message = "\(error)"
+                let message = userFacingMessage(error)
                 phase = .failed(message)
                 status = ""
                 GTLog.error("translation failed: \(error)")

@@ -49,7 +49,7 @@ func registerTranslateRoute(
                             "detected": meta.detected, "target": meta.target, "truncated": meta.truncated,
                         ]))
                     } catch {
-                        cont.yield(SSE.event(["error": "\(error)"]))
+                        cont.yield(SSE.event(["error": userFacingMessage(error)]))
                     }
                     cont.yield(SSE.done)
                     cont.finish()
@@ -77,7 +77,7 @@ func registerTranslateRoute(
         } catch {
             // 引擎层未知错误（如内存压力下 GPU 分配失败）：透出详情，便于客户端与日志定位
             GTLog.error("translate failed: \(error)")
-            return try .json(["error": "\(error)"], statusCode: .internalServerError)
+            return try .json(["error": userFacingMessage(error)], statusCode: .internalServerError)
         }
     }
 }
