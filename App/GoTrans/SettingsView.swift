@@ -291,9 +291,14 @@ struct SettingsView: View {
     }
 
     private var shortcutsSection: some View {
-        GTPanelSection(title: "快捷键", subtitle: "剪贴板快捷键由 app 管理；划词翻译由 macOS 服务管理。") {
+        GTPanelSection(title: "快捷键", subtitle: "剪贴板与主窗口快捷键由 app 管理；划词翻译由 macOS 服务管理。") {
             GTPanelRow(title: "翻译剪贴板", subtitle: "先复制，再按快捷键。") {
                 KeyboardShortcuts.Recorder("", name: .translateSelection)
+                    .labelsHidden()
+            }
+            GTPanelDivider()
+            GTPanelRow(title: "显示主窗口", subtitle: "窗口已在最前时再按一次收起。") {
+                KeyboardShortcuts.Recorder("", name: .showMainWindow)
                     .labelsHidden()
             }
             GTPanelDivider()

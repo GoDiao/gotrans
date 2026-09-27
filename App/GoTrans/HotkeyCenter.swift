@@ -5,6 +5,9 @@ extension KeyboardShortcuts.Name {
     // 名字字符串保持 "translateSelection" 不变：用户此前录制的快捷键按此键持久化，
     // 改键会丢用户设置。语义已从「读取选中」变为「翻译剪贴板」。
     static let translateSelection = Self("translateSelection", default: .init(.d, modifiers: [.option]))
+
+    // 同上：字符串键名是用户录制值的持久化 key，定下就不能改。
+    static let showMainWindow = Self("showMainWindow", default: .init(.g, modifiers: [.option, .command]))
 }
 
 @MainActor
@@ -12,6 +15,9 @@ enum HotkeyCenter {
     static func install() {
         KeyboardShortcuts.onKeyUp(for: .translateSelection) {
             Task { @MainActor in handle() }
+        }
+        KeyboardShortcuts.onKeyUp(for: .showMainWindow) {
+            Task { @MainActor in MainWindowController.shared.toggle() }
         }
     }
 
