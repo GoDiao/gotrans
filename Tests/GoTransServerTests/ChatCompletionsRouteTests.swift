@@ -5,8 +5,8 @@ import FlyingFox
 import GoTransKit
 
 @Suite struct ChatCompletionsRouteTests {
-    func startServer() async throws -> (URL, Task<Void, Error>) {
-        let api = APIServer(translator: MockTranslator(), port: 0)
+    func startServer(_ translator: some TranslationService = MockTranslator()) async throws -> (URL, Task<Void, Error>) {
+        let api = APIServer(translator: translator, port: 0)
         let task = Task { try await api.run() }
         let port = try await api.waitForPort()
         return (URL(string: "http://127.0.0.1:\(port)")!, task)
@@ -65,5 +65,17 @@ import GoTransKit
         defer { task.cancel() }
         let (_, resp) = try await post(base, ["messages": [[String: Any]]()])
         #expect(resp.statusCode == 400)
+    }
+
+    @Test func localizedEngineErrorReturnsDescription() async throws {
+        let (base, task) = try await startServer(LocalizedFailingTranslator())
+        defer { task.cancel() }
+        let (data, resp) = try await post(base, [
+            "messages": [["role": "user", "content": "Hello"]],
+        ])
+        #expect(resp.statusCode == 500)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let error = json["error"] as? [String: String]
+        #expect(error?["message"] == "翻译引擎暂不可用。")
     }
 }

@@ -112,6 +112,36 @@ import GoTransKit
         #expect((json["error"] as? String)?.contains("allocation failed") == true)
     }
 
+    @Test func localizedEngineErrorReturnsDescription() async throws {
+        let (base, task) = try await startServer(LocalizedFailingTranslator())
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "hi"])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 500)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(json["error"] as? String == "翻译引擎暂不可用。")
+    }
+
+    @Test func localizedMidStreamErrorReturnsDescriptionInSSE() async throws {
+        let (base, task) = try await startServer(LocalizedFailingTranslator(failInStream: true))
+        defer { task.cancel() }
+        var req = URLRequest(url: base.appendingPathComponent("translate"))
+        req.httpMethod = "POST"
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": "hi", "stream": true])
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        #expect((resp as! HTTPURLResponse).statusCode == 200)
+        var errorMessage: String?
+        for try await line in bytes.lines where line.hasPrefix("data: ") {
+            let payload = String(line.dropFirst(6))
+            if payload == "[DONE]" { break }
+            let json = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as! [String: Any]
+            errorMessage = json["error"] as? String
+        }
+        #expect(errorMessage == "翻译引擎暂不可用。")
+    }
+
     @Test func midStreamEngineErrorReturns500WithDetail() async throws {
         let (base, task) = try await startServer(ExplodingTranslator(failInStream: true))
         defer { task.cancel() }
