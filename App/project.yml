@@ -35,8 +35,8 @@ targets:
         CFBundleDisplayName: GoTrans
         CFBundleIconName: AppIcon
         LSApplicationCategoryType: public.app-category.productivity
-        CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         NSServices:
         - NSMenuItem:
@@ -58,8 +58,10 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_VERSION: '6.0'
         ARCHS: arm64
-        MARKETING_VERSION: "1.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        # 全仓库唯一的版本号来源。发布工作流与 Scripts/release.sh 都 grep 这一行；
+        # Info.plist 的 CFBundleShortVersionString 也从这里取值，不要再写字面值。
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "2"
       configs:
         Release:
           # ad-hoc 签名：免费分发，不公证。换成付费 Developer ID 证书时，把
