@@ -27,6 +27,21 @@ final class MainWindowController: NSObject, NSToolbarDelegate {
 #endif
     }
 
+    /// 全局快捷键的开关动作：窗口已在前台就收起，否则举到最前。
+    /// 收起只 orderOut 主窗口，不 hide 整个 app——那会把浮窗和状态栏菜单一起带走。
+    func toggle() {
+        guard let window,
+              window.isVisible,
+              !window.isMiniaturized,
+              NSApp.isActive,
+              window.isKeyWindow else {
+            show()
+            return
+        }
+        window.orderOut(nil)
+        logger.info("Ordered out main window")
+    }
+
     func showSettings() {
         if let settingsWindow {
             scheduleBringToFront(settingsWindow)
@@ -74,7 +89,6 @@ final class MainWindowController: NSObject, NSToolbarDelegate {
             win.titlebarSeparatorStyle = .none
             win.toolbarStyle = .unifiedCompact
             win.toolbar = makeToolbar()
-            win.isMovableByWindowBackground = true
             win.isOpaque = false
             win.backgroundColor = .clear
             win.hasShadow = true
