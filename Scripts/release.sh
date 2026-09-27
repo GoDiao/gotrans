@@ -14,7 +14,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_DIR="App"
-VERSION=$(grep 'MARKETING_VERSION' $APP_DIR/project.yml | head -1 | sed 's/.*"\(.*\)"/\1/')
+# 只认「行首是 MARKETING_VERSION: 且值带引号」的那一行。不要用
+# grep MARKETING_VERSION | head -1：Info.plist 那几个属性里也写着 $(MARKETING_VERSION)，
+# 会先被匹配到，取出整行文本。
+VERSION=$(sed -n 's/^ *MARKETING_VERSION: "\(.*\)"$/\1/p' "$APP_DIR/project.yml" | head -1)
+[ -n "$VERSION" ] || { echo "❌ 没能从 $APP_DIR/project.yml 解析出 MARKETING_VERSION" >&2; exit 1; }
 
 echo "==> 构建 Release $VERSION"
 cd $APP_DIR
